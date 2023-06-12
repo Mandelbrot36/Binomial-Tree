@@ -1,0 +1,1102 @@
+---
+title: "Projekt z wstępu do inżynierii finansowej"
+author: "Maciej Karawan, Patryk Jędrzejak, Krzysztof Misiewicz"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output:
+  pdf_document: 
+    latex_engine: xelatex
+    extra_dependencies: ['amsmath']
+  word_document:
+    toc: yes
+  html_document:
+    toc: yes
+    toc_float: yes
+    df_print: paged
+---
+<style>
+#TOC {
+  color: #708090;
+  font-family: Calibri;
+  font-size: 16px; 
+  border-color: #708090;
+}
+#header {
+  color: #F08080;
+  background-color: #F5F5F5;
+  opacity: 0.6;
+  font-family: Calibri;
+  font-size: 20px;
+  text-align: center;
+}
+body {
+  color: #708090;
+  font-family: Calibri;
+  background-color: #F5F5F5;
+}
+pre {
+  color: #708090;
+  background-color: #F8F8FF;
+}
+</style>
+
+# Cel projektu
+
+Celem poniższej pracy jest wycena opcji europejskich oraz amerykańskich.  
+Jak i analiza ich ceny ze względu na zmianę przyjmowanych parametrów.
+
+# Wstęp
+
+W projekcie zakładamy dwumianowy model rynku, oznacza to że cenę aktywa bazowego przedstawimy jako spacer losowy zareprezentowany jako drzewo *path-dependent*.  
+
+Dopuszczamy dwa możliwe scenariusze zmiany ceny aktywa bazowego, wzrost rzędu $u$ lub spadek rzędu $d$.  
+Stopa procentowa wolna od ryzyka wynosi $r$, cena początkowa aktywa bazowego w chwili $t = 0$ to $S_0$, strike opcji to $K$. Czas zapadalności oznaczamy poprzez $T$, przyjmowany krok będziemy oznaczać poprzez $\Delta t$.  
+
+Przyjmujemy oczywiście wymagane założenie o braku arbitrażu na rynku.  
+
+# Przyjęte parametry w waluacji
+
+* $\Delta t$ = $1/12$
+* $u$ = $e^{\sigma \sqrt{\Delta t}}$
+* $d$ = $e^{- \sigma \sqrt{\Delta t}}$
+* $\sigma$ = $0.3$
+* $S_0$ = $50$
+* $r$ = $0.02$
+* $K$ = $48$
+* $T$ = $2$
+
+## Użyte biblioteki
+
+```{r 1,warning=FALSE}
+library(knitr)
+library(reshape2)
+library(ggplot2)
+library(Thermimage)
+```
+
+```{r 2, echo=FALSE,warning=FALSE}
+#Funkcje potrzebne do zadań 1-3
+
+# Tworzenie kolumn w wyjsciowej macierzy
+# Kazda kolumna to mozliwy stan w n-tym momencie
+
+# MakeBranch
+
+# s0 = wartosc aktywa w 0
+# s = zmiennosc
+# dt = krok
+# j = ktory okres
+# n = liczba wszystkich krokow
+
+MakeBranch = function(s0, s, dt, j, n){
+  u = exp(s*sqrt(dt))
+  d = 1/u
+  
+  power = j:0
+  branch = c(s0*( ( u^power )*( d^rev(power) ) ), rep(0, n-j))
+  
+  return(branch)
+}
+
+# MakeTree
+# dt = krok
+# t = maxymalny okres
+# s0 = wartosc aktywa w 0
+
+MakeTree = function(dt, t, s, s0){
+  n = t * 1/dt # liczba krokow
+  tree = matrix(0, nrow=n+1, ncol=n+1) #PATH DEPENDENT
+  
+  for(i in 0:n){
+    
+    tree[,i+1] = MakeBranch(s0, s, dt, i, n) 
+    
+  }
+  
+  return(tree) 
+}
+
+
+
+TreeCall = function(Tree, k){
+  pmax(Tree - k, 0)
+}
+
+TreePut = function(Tree, k){
+  pmax(k-Tree, 0)
+}
+
+# TreeValuate
+
+# Tree = macierz payoffu
+# type = typ opcji
+# dt = krok
+# t = maxymalny okres
+# s = zmiennosc
+# r = stopa procentowa
+
+
+TreeValuate = function(Tree,type = 0, dt, t, s, r){
+  u = exp(s*sqrt(dt))
+  d = 1/u
+  
+  
+  p = (exp(r*dt) - d) / (u - d)
+  n = t * 1/dt
+  
+  
+  prev = Tree[, n+1]
+  VTree = matrix(prev, ncol=1)
+  
+  if(type == 0){
+    
+    for(i in (n+1):2){
+      
+      NewCol = exp(-r*dt)*(prev[1:i-1]*p + prev[2:i]*(1-p))
+      NewCol = c(NewCol, rep(0, n+2 - i))
+      
+      prev = NewCol
+      VTree = cbind(prev, VTree)
+      
+      }
+  
+  }else if(type == 1){
+    
+    for(i in (n+1):2){
+      
+      NewCol = exp(-r*dt)*(prev[1:i-1]*p + prev[2:i]*(1-p))
+      NewCol = c(NewCol, rep(0, n+2 - i))
+      NewCol = pmax(NewCol, Tree[,i-1])
+      prev = NewCol
+      VTree = cbind(prev, VTree)
+      
+    }
+    
+  }
+  
+  names = 0:n
+  colnames(VTree) = names
+  
+  return(VTree)
+}
+
+Wycena = function(Position,Type,dt,t,s,s0,k,r)
+{
+  Tree=MakeTree(dt,t,s,s0)
+  MacierzCen=Tree
+  if (Position=='Call')
+  {
+    Tree=TreeCall(Tree,k)
+  }
+  if (Position=='Put')
+  {
+    Tree=TreePut(Tree,k)
+  }
+  if (Type=='Europejska')
+  {
+    MacierzPayoffu=TreeValuate(Tree,type=0,dt,t,s,r)
+  }
+  if (Type=='Amerykanska')
+  {
+    MacierzPayoffu=TreeValuate(Tree,type=1,dt,t,s,r)
+  }
+  x = list(MacierzPayoffu, MacierzCen)
+}
+
+Cena <- function(Position,Type,dt,t,s,s0,k,r){
+  x = Wycena(Position,Type,dt,t,s,s0,k,r)
+  return(matrix(unlist(x[1]), nrow=25)[1,1])
+}
+```
+
+\pagebreak
+
+# Świat neutralnego ryzyka
+
+Przyjmujemy pewny model, uproszczenie otaczającej nas rzeczywistości, musimy się więc liczyć z pewnymi błędami i niedokładnym odzwierciedleniem sytuacji rynkowej.  
+Wyceniając instrumenty finansowe w modelu neutralnego ryzyka, nie bierzemy pod uwagę prawdopodbieństwa z jakim cena aktywa bazowego spada bądź rośnie.    
+Inwestorom daje to możliwość zysku poprzez spekulacje co do tych prawdopodobieństw. My przy wycenie opcji prowadzimy obliczenia niezależnie od tych spekulacji.    
+Oczywiście nie żyjemy w takim świecie, ceny opcji nie przyniosą zysku arbitrażowego, będą uczciwe z punktu widzenia zmiany wartości pieniądza w czasie, ale nadal pozostaje losowość cen rynkowych, której nie bierzemy pod uwagę w tym modelu, a która wpływa na zysk bądź stratę inwestora.  
+
+Co wynika z takiego modelu?  
+Pomijając rachunki na przykład to, że przy prawdopodobieństwach wzrostu ceny $p$ i jej spadku $(1-p)$ zachodzi: $\mathbb{E}[S_T] = S_0e^{rT}$.  
+Czyli nasze aktywo bazowe rośnie średnio tempem $r$, przy stopie $r$ nieobarczonej ryzykiem.  
+
+Ważne jest oczywiście żeby dobrać odpowiednie parametry, przy p obliczanym w sposób: 
+
+$$
+p = \frac{e^{r \Delta t} - d}{u - d}
+$$
+
+
+# Wycena opcji 
+
+## Call
+
+### Europejska
+
+```{r 3, echo=FALSE,warning=FALSE}
+knitr::kable(
+  Cena('Call','Europejska',1/12,2,0.3,50,48,0.02),
+  col.names = c('Wycena opcji europejskiej call'),
+  align = 'c')                    
+```
+
+### Amerykańska
+
+```{r 4, echo=FALSE,warning=FALSE}
+knitr::kable(
+  Cena('Call','Amerykanska',1/12,2,0.3,50,48,0.02),
+  col.names = c('Wycena opcji amerykańskiej call'),
+  align = 'c')
+```
+
+<br>
+<br>
+
+Nasuwa się pytanie, **dlaczego ceny obu tych opcji są równe?**  
+
+Na początku postaramy się uzasadnić odpowiedź na to pytanie matematycznie.  
+
+Brak różnicy w cenie sugeruje, że w żadnym węźle naszego drzewa dwumianowego, czyli w stanie w jakiej cena aktywa bazowego może się znaleźć, wartość kontynuacji opcji była większa niż wartość wykonania jej w danym momencie.  
+
+Widać to na poniższym wykresie.
+
+
+```{r 5, echo=FALSE,warning=FALSE}
+
+momenty = function(L, K, d, opcja){
+  
+  payoff = matrix(unlist(L[1]), nrow=d)
+  cena = matrix(unlist(L[2]), nrow=d)
+  
+  if(opcja == "Put"){
+    
+    wykonanie = TreePut(cena, K)
+    
+  }else{
+    
+    wykonanie = TreeCall(cena, K)
+    
+  }
+  
+  t = payoff == wykonanie
+  t[payoff == 0] = FALSE
+  t[lower.tri(t)] = NA
+  
+  t = flip.matrix(t)
+  colnames(t) = 1:d
+  
+  momenty = melt(t)
+  
+}
+```
+
+
+
+```{r Momenty wykonania APut, echo=FALSE,warning=FALSE}
+x = Wycena('Call','Amerykanska',1/12,2,0.3,50,48,0.02)
+momenty3 = momenty(x, 48, 25, "Call")
+
+ggplot(momenty3, aes(x = Var2, y = Var1)) + 
+  geom_raster(aes(fill=value), alpha=0.75) +
+  theme_minimal(base_size=10) + 
+  scale_x_continuous(breaks=seq(1,25,2)) +
+  scale_y_continuous(breaks=seq(1,25,2), labels=c(seq(0,24,2)),position='right') +
+  labs(x=expression(1/Delta*t), y="k", title="Momenty wykonania opcji amerykańskiej call") +
+  theme(plot.title = element_text(hjust = 0.5),
+        legend.position = 'left',
+        plot.subtitle = element_text(hjust = 0.5), 
+        axis.title.y = element_text(angle = 90, vjust = 0.5)) +
+  guides(fill=guide_legend(title="Opcja")) + 
+  scale_fill_discrete(labels=paste(c("Niewykonana","Wykonana")),na.translate = F) 
+
+```
+
+Cena aktywa bazowego w każdym węźle powyższego wykresu to $S_0u^kd^{T-k}$ gdzie $k\in[0,..,T]$.
+Kolumna wykresu to $T$ a rząd to $k$, dlatego dla większości kolumn nie mamy wszystkich 25 rzędów. Cena jest wyznaczana w dla każdej wartości $k$.
+
+## Teoretyczne uzasadnienie
+
+Oznaczmy sobie:
+
+$V^{j}_{t}$ = wartość opcji w momencie $t$ w $j$-tej pozycji
+
+$V^{\uparrow t}_{t+1}$ = wartość opcji w momencie $t+1$ którego cena poszła w góre w stosunku do $V^{j}_t$ 
+
+$V^{\downarrow t}_{t+1}$ = wartość opcji w momencie $t+1$ którego cena poszła w dół w stosunku do $V^{j}_{t}$ 
+
+$S^{j}_{t}$ = wartość aktywa bazowego w momencie $t$ w $j$-tej pozycji
+
+$V^{continue}_{t}$ = wartość kontynuacji będąc w ustalonym węźle w momencie $t$
+
+$$V^{continue}_{t} = e^{-r\Delta t}[pV^{\uparrow t}_{t+1} + (1-p)V^{\downarrow t}_{t+1}]\\
+Payoff[S^{j}_t] = S^{j}_t - K$$
+
+
+Wiemy, że opcja wykona się w momencie zapadalności w pewnej części węzłów.  
+
+Będziemy chcieli pokazać, że jeżeli okres przed momentem zapadalności nie opłacało nam się wykonać opcji, to nie opłaci nam się to nigdy.  
+
+Czyli będziemy chcieli dowieść, dla każdych i odpowiednio ustalonych $t$ i $j$: 
+
+$$Payoff[S^j_t] \leq V^{continue}_{t}$$
+
+Zawsze zachodzi.      
+Inaczej mówiąc: 
+
+$$\forall_{T \leq 23} ~ \forall_{k \leq T} ~~ S_0u^kd^{T-k} - K \leq e^{-r\Delta t}[pV^{\uparrow t}_{t+1} + (1-p)V^{\downarrow t}_{t+1}]$$
+
+Załóżmy, że
+
+$$
+Payoff[S^{\uparrow t}_{t+1}]=S_0u^{k+1}d^{T-k} \leq e^{-r\Delta t}[pV^{\uparrow t}_{t+2} + (1-p)V^{\downarrow t}_{t+2}] = V^{\uparrow t}_{t+1}
+$$
+$$
+Payoff[S^{\downarrow t}_{t+1}]=S_0u^{k}d^{T+1-k} \leq e^{-r\Delta t}[pV^{\uparrow t}_{t+2} + (1-p)V^{\downarrow t}_{t+2}] = V^{\downarrow t}_{t+1}
+$$
+
+Idąc od prawej strony: 
+
+$$
+\begin{aligned}
+V^{continue}_{t} &= e^{-r\Delta t}[pV^{\uparrow t}_{t+1} + (1-p)V^{\downarrow t}_{t+1}] \\ &\geq e^{-r \Delta t}[pPayoff[S^{\uparrow t}_{t+1}] + (1-p)Payoff[S^{\downarrow t}_{t+1}]] \\
+&= e^{-r \Delta t}[p(S_0u^{k+1}d^{t-k} - K) + (1-p)(S_0u^kd^{t+1-k}-K)] \\
+&= e^{-r \Delta t}[pS_0u^{k+1}d^{t-k} - pK + S_0u^kd^{t+1-k} - K - pS_0u^kd^{t+1-k} + pK] \\
+&= e^{-r \Delta t}[S_0u^{k}d^{t-k}(pu + d - pd) - K] \\
+&= S_0u^{k}d^{t-k}(pu + d - pd)e^{-r \Delta t} - Ke^{-r \Delta t} \\
+&= S_0u^{k}d^{t-k}(p(u - d) + d)e^{-r \Delta t} - Ke^{-r \Delta t} \\
+&= S_0u^{k}d^{t-k}(\frac{e^{r \Delta t} - d}{u - d}(u - d) + d)e^{-r \Delta t} - Ke^{-r \Delta t} \\
+&=  S_0u^{k}d^{t-k}(e^{r \Delta t} - d + d)e^{-r \Delta t} - Ke^{-r \Delta t} \\
+&= S_0u^{k}d^{t-k} - Ke^{-r \Delta t} ~~~~~ \geq  S_0u^{k}d^{t-k} - K = Payoff[S^j_t]
+\end{aligned}
+$$
+
+Wystarczy sprawdzić numerycznie, że warunek zachodzi w węzłach poprzedzających okres zapadalności.  
+Co przyjmijmy przedstawia nasz wykres.  
+Wówczas na mocy indukcji nasza teza została udowodniona.    
+
+Okazuje się, że badana równość zawsze będzie spełniona, jeżeli tylko nasze aktywo nie będzie wypłacało dywidend. Jeżeli by wypłacało, moglibyśmy chcieć wykonać opcję chwilę przed momentem wypłacenia dywidendy.    
+
+Patrząc bardziej ekonomicznie można byłoby naszą tezę udowodnić konstruując dwa portfele.  
+Pierwszy $[I]$ składający się z opcji amerykańskiej call.  
+Drugi $[II]$ składający się z aktywa bazowego i pożyczki na zdyskontowaną wartość $K$.  
+Wówczas w momencie zapadalności wartość $[I]$ byłaby niemniejsza od $[II]$.  
+Co przy założeniu braku arbitrażu sugeruje że taka nierówność musi zachodzić w dowolnym poprzedzającym momencie.  
+Sugeruje to, że w żadnym momencie nie opłacałoby się nam wykonać opcji, skoro jej wartość jest niemniejsza od wartości jej wykonania.
+
+\pagebreak
+
+## Put
+
+### Europejska
+
+```{r 6, echo=FALSE,warning=FALSE}
+knitr::kable(
+  Cena('Put','Europejska',1/12,2,0.3,50,48,0.02),
+  col.names = c('Wycena opcji europejskiej put'),
+  align = 'c')
+```
+
+### Amerykańska
+
+```{r 7, echo=FALSE,warning=FALSE}
+knitr::kable(
+  Cena('Put','Amerykanska',1/12,2,0.3,50,48,0.02),
+  col.names = c('Wycena opcji amerykańskiej put'),
+  align = 'c')
+```
+
+Cena opcji amerykańskiej jest wyższa ze względu na możliwość wykonania opcji gdy jest to bardziej opłacalne niż kontynuacja. Dzięki temu spodziewamy się większych zysków z takiej opcji, stąd wyższa cena.  
+Cena obu opcji jest znacząco niższa niż cena opcji call. Wynika to z ustalonej ceny strike'a, która jest mniejsza niż zakumulowana cena początkowa aktywa (co rozwiniemy w dalszej części raportu).
+
+```{r 8, echo=FALSE,warning=FALSE}
+x=Wycena('Put','Amerykanska',1/12,2,0.3,50,48,0.02)
+momenty3 = momenty(x, 48, 25, "Put")
+
+ggplot(momenty3, aes(x = Var2, y = Var1)) + 
+  geom_raster(aes(fill=value), alpha=0.75) +
+  theme_minimal(base_size=10) + 
+  scale_x_continuous(breaks=seq(1,25,2)) +
+  scale_y_continuous(breaks=seq(1,25,2), labels=c(seq(0,24,2)),position='right') +
+  labs(x=expression(1/Delta*t), y="k", title="Momenty wykonania opcji amerykańskiej put") +
+  theme(plot.title = element_text(hjust = 0.5),
+        legend.position = 'left',
+        plot.subtitle = element_text(hjust = 0.5), 
+        axis.title.y = element_text(angle = 90, vjust = 0.5)) +
+  guides(fill=guide_legend(title="Opcja")) + 
+  scale_fill_discrete(labels=paste(c("Niewykonana","Wykonana")),na.translate = F)
+```
+
+Powyższy wykres pokazuje momenty w których opłaca się natychmiastowo wykonać opcję. Widzimy tu, że opłaca się ją wykonywać gdy cena aktywa bazowego spada i oddalamy się od zapadalności, czyli mamy  zysk i duże szanse, że sytuacja się zmieni. Wtedy dobrym rozwiązaniem może być wykonanie opcji z pewnym zyskiem i bez narażania się na jego zmniejszenie.   
+Opcje put mają ograniczony maksymalny zysk (gdy wartość aktywa spadnie do zera) więc jest sens wykonywać je w trakcie zamiast czekać. 
+Opcje call mają potencjalnie dowolnie duży zysk (choć w naszym modelu jest skończony) dlatego opłaca się czekać.
+
+\pagebreak
+
+# Analiza wrażliwości cen opcji na zmianę parametrów
+
+
+```{r 9, echo=FALSE,warning=FALSE}
+K <- seq(1,200,1)
+
+Cena_K <- data.frame("Cena wykonania" = K,
+                             "Cena opcji EPut" = 
+                               sapply(K,function(x) Cena(
+                                            Position = 'Put',
+                                            Type = 'Europejska',
+                                            dt = 1/12,
+                                            t = 2,
+                                            s = 0.3,
+                                            s0 = 50,
+                                            k = x,
+                                            r = 0.02)),
+                                "Cena opcji ECall" =
+                                sapply(K,function(x) Cena(
+                                            Position = 'Call',
+                                            Type = 'Europejska',
+                                            dt = 1/12,
+                                            t = 2,
+                                            s = 0.3,
+                                            s0 = 50,
+                                            k = x,
+                                            r = 0.02)),
+                                "Cena opcji APut" =
+                                sapply(K,function(x) Cena(
+                                            Position = 'Put',
+                                            Type = 'Amerykanska',
+                                            dt = 1/12,
+                                            t = 2,
+                                            s = 0.3,
+                                            s0 = 50,
+                                            k = x,
+                                            r = 0.02)),
+                                "Cena opcji ACall" =
+                                sapply(K,function(x) Cena(
+                                            Position = 'Call',
+                                            Type = 'Amerykanska',
+                                            dt = 1/12,
+                                            t = 2,
+                                            s = 0.3,
+                                            s0 = 50,
+                                            k = x,
+                                            r = 0.02)))
+
+ggplot(Cena_K,aes(x = Cena.wykonania)) +
+  geom_line(aes(y = Cena.opcji.EPut,color = "Europejski Put")) + 
+  geom_line(aes(y = Cena.opcji.ECall,color = "Europejski Call")) +
+  geom_line(aes(y = Cena.opcji.APut,color = "Amerykański Put")) + 
+  geom_line(aes(y = Cena.opcji.ACall,color = "Amerykański Call"))+
+    scale_colour_manual("", 
+                      breaks = c("Europejski Put", 
+                                 "Europejski Call", 
+                                 "Amerykański Put",
+                                 "Amerykański Call"),
+                      values = c("blue", "yellow", "darkgreen","red")) +
+    labs(x="Cena wykonania K", y="Cena opcji", title="W zależności od ceny wykonania K") +
+  theme(plot.title = element_text(hjust = 0.5)) + theme_minimal(base_size=10)
+```
+
+Cena opcji put rośnie wraz ze wzrostem ceny wykonania strike, ponieważ payoff opcji put to  $max(K-S_T;0)$. Cena opcji amerykańskiej put jest zawsze wyższa od ceny europejskiego put ze względu na możliwość natychmiastowego wykonania opcji co opisywaliśmy wyżej. Różnica między amerykańską a europejską opcją zwiększa się wraz z ceną wykonania ze względu na to, że natychmiastowe wykonanie tej opcji korzysta właśnie ze wzoru na payoff w danym momencie. Wysoka wartość strike sprawi, że w jeszcze większej ilości sytuacji opłaca się wykonać opcję natychmiast.
+Ceny obu opcji call są równe zgodnie z wnioskiem z zadania 3 i spadają (dążą do 0) wraz ze wzrostem strike, ponieważ payoff opcji call to $max(S_T-K;0)$.
+Ceny obu opcji przecinają się w $K = 52.04054$ czyli zakumulowanej cenie początkowej aktywa ($K=S_0*e^{rT}$). Jest to konsekwencja parytetu PUT-CALL
+$$C_E+K \cdot e^{-rT}=P_E+S_0$$
+
+
+```{r 10, echo=FALSE,warning=FALSE}
+T <- seq(1/12,7,0.005)
+
+Cena_T <- data.frame("Maksymalny okres" = T,
+                             "Cena opcji EPut" = 
+                               sapply(T,function(t) Cena(
+                                            Position = 'Put',
+                                            Type = 'Europejska',
+                                            dt = 1/12,
+                                            t,
+                                            s = 0.3,
+                                            s0 = 50,
+                                            k = 48,
+                                            r = 0.02)),
+                                "Cena opcji ECall" =
+                                sapply(T,function(t) Cena(
+                                            Position = 'Call',
+                                            Type = 'Europejska',
+                                            dt = 1/12,
+                                            t,
+                                            s = 0.3,
+                                            s0 = 50,
+                                            k = 48,
+                                            r = 0.02)),
+                                "Cena opcji APut" =
+                                sapply(T,function(t) Cena(
+                                            Position = 'Put',
+                                            Type = 'Amerykanska',
+                                            dt = 1/12,
+                                            t,
+                                            s = 0.3,
+                                            s0 = 50,
+                                            k = 48,
+                                            r = 0.02)),
+                                "Cena opcji ACall" =
+                                sapply(T,function(t) Cena(
+                                            Position = 'Call',
+                                            Type = 'Amerykanska',
+                                            dt = 1/12,
+                                            t,
+                                            s = 0.3,
+                                            s0 = 50,
+                                            k = 48,
+                                            r = 0.02)))
+
+ggplot(Cena_T,aes(x = Maksymalny.okres)) +
+  geom_line(aes(y = Cena.opcji.EPut,color = "Europejski Put")) + 
+  geom_line(aes(y = Cena.opcji.ECall,color = "Europejski Call")) +
+  geom_line(aes(y = Cena.opcji.APut,color = "Amerykański Put")) + 
+  geom_line(aes(y = Cena.opcji.ACall,color = "Amerykański Call"))+
+    scale_colour_manual("", 
+                      breaks = c("Europejski Put", 
+                                 "Europejski Call", 
+                                 "Amerykański Put",
+                                 "Amerykański Call"),
+                      values = c("blue", "yellow", "darkgreen","red")) +
+    labs(x="Okres T", y="Cena opcji", title="W zależności od maksymalnego okresu T") +
+  theme(plot.title = element_text(hjust = 0.5)) + theme_minimal(base_size=10)
+```
+
+Wszystkie ceny opcji rosną wraz ze zwiększającym się czasem wykonania, dzieje się tak dlatego, że w miarę jak rośnie czas wykonania, zwiększa się ilość możliwych do osiągnięcia cen. Te ceny które działają na niekorzyść danej opcji i tak są zamieniane na zera przez funkcję payoffu, a zwiększa się również liczba węzłów przynoszących zysk.   
+W konsekwencji z czasem możemy spodziewać się, że osiągniemy coraz większe zyski, a nie możemy ponieść straty, więc opłaca nam się czekać tak długo jak to tylko możliwe.  
+Różnica między cenami europejskiego put i amerykańskiego put będzie rosła wraz ze zwiększającym się czasem wykonania, ze względu na możliwość natychmiastowego wykonania amerykańskiej opcji put w coraz większej ilości momentów i co za tym idzie osiągnięcia większego zysku z każdym takim wykonaniem.    
+Wycena opcji call odbiega od opcji put ze względu na 'nieograniczony' zysk, opcje put nie wypracują zysku większego niż strike więc ich cena będzie stabilizować się w pewnym miejscu.  
+Cena opcji call również się ustabilizuje ale na dużo wyższym poziomie (w okolicy zdyskontowanej na moment zero ceny poczatkowej aktywa bazowego). 
+
+
+```{r 11, echo=FALSE,warning=FALSE}
+S_0 <- seq(1,200,1)
+
+Cena_S_0 <- data.frame("Wartosc aktywa w chwili 0" = S_0,
+                       "Cena opcji EPut" = 
+                               sapply(S_0,function(x) Cena(
+                                            Position = 'Put',
+                                            Type = 'Europejska',
+                                            dt = 1/12,
+                                            t = 2,
+                                            s = 0.3,
+                                            s0 = x,
+                                            k = 48,
+                                            r = 0.02)),
+                                "Cena opcji ECall" =
+                                sapply(S_0,function(x) Cena(
+                                            Position = 'Call',
+                                            Type = 'Europejska',
+                                            dt = 1/12,
+                                            t = 2,
+                                            s = 0.3,
+                                            s0 = x,
+                                            k = 48,
+                                            r = 0.02)),
+                                "Cena opcji APut" =
+                                sapply(S_0,function(x) Cena(
+                                            Position = 'Put',
+                                            Type = 'Amerykanska',
+                                            dt = 1/12,
+                                            t = 2,
+                                            s = 0.3,
+                                            s0 = x,
+                                            k = 48,
+                                            r = 0.02)),
+                                "Cena opcji ACall" =
+                                sapply(S_0,function(x) Cena(
+                                            Position = 'Call',
+                                            Type = 'Amerykanska',
+                                            dt = 1/12,
+                                            t = 2,
+                                            s = 0.3,
+                                            s0 = x,
+                                            k = 48,
+                                            r = 0.02)))
+
+ggplot(Cena_S_0,aes(x = Wartosc.aktywa.w.chwili.0)) +
+  geom_line(aes(y = Cena.opcji.EPut,color = "Europejski Put")) + 
+  geom_line(aes(y = Cena.opcji.ECall,color = "Europejski Call")) +
+  geom_line(aes(y = Cena.opcji.APut,color = "Amerykański Put")) + 
+  geom_line(aes(y = Cena.opcji.ACall,color = "Amerykański Call"))+
+    scale_colour_manual("", 
+                      breaks = c("Europejski Put", 
+                                 "Europejski Call", 
+                                 "Amerykański Put",
+                                 "Amerykański Call"),
+                      values = c("blue", "yellow", "darkgreen","red")) +
+    labs(x=expression(S_0), y="Cena opcji", title="W zależności od wartości aktywa bazowego w chwili t = 0") +
+  theme(plot.title = element_text(hjust = 0.5)) + theme_minimal(base_size=10)
+```
+
+Cena opcji call rośnie, a cena opcji put spada, ponieważ zwiększająca się cena aktywa bazowego przy stałym strike oznacza że call stanie się opłacalny do natychmiastowego wykonania w momencie zakupu, zgodnie z oczekiwaniem cena opcji musi wzrastać równoważnie z tym o ile cena aktywa bazowego przewyższa strike, tak aby w momencie wykonania nie można było uzyskać natychmiastowego zysku. W konsekwencji cena opcji call wzrasta liniowo tak samo jak wartość aktywa bazowego. Cena opcji put dąży do zera, ponieważ gdy wartość aktywa bazowego wzrasta powyżej strike zobowiązujemy się sprzedać aktywo po niższej cenie niż ta którą osiąga aktywo w momencie zakupu opcji. Moment w którym wartość początkowa aktywa jest równa zdyskontowanej na $t=0$ wartości strike to moment w którym ceny obu opcji są równe z parytetu PUT-CALL.
+$$C_E+K \cdot e^{-rT}=P_E+S_0$$
+ceny są równe dla $S_0=K*e^{-rT}$, czyli w naszym przypadku dla $S_0 = 46.11789$
+
+
+
+```{r 12, echo=FALSE,warning=FALSE}
+sigma <- seq(0,6,0.01)
+
+Cena_sigma <- data.frame("Zmiennosc" = sigma,
+                             "Cena opcji EPut" = 
+                               sapply(sigma,function(x) Cena(
+                                            Position = 'Put',
+                                            Type = 'Europejska',
+                                            dt = 1/12,
+                                            t = 2,
+                                            s = x,
+                                            s0 = 50,
+                                            k = 48,
+                                            r = 0.02)),
+                                "Cena opcji ECall" =
+                                sapply(sigma,function(x) Cena(
+                                            Position = 'Call',
+                                            Type = 'Europejska',
+                                            dt = 1/12,
+                                            t = 2,
+                                            s = x,
+                                            s0 = 50,
+                                            k = 48,
+                                            r = 0.02)),
+                                "Cena opcji APut" =
+                                sapply(sigma,function(x) Cena(
+                                            Position = 'Put',
+                                            Type = 'Amerykanska',
+                                            dt = 1/12,
+                                            t = 2,
+                                            s = x,
+                                            s0 = 50,
+                                            k = 48,
+                                            r = 0.02)),
+                                "Cena opcji ACall" =
+                                sapply(sigma,function(x) Cena(
+                                            Position = 'Call',
+                                            Type = 'Amerykanska',
+                                            dt = 1/12,
+                                            t = 2,
+                                            s = x,
+                                            s0 = 50,
+                                            k = 48,
+                                            r = 0.02)))
+
+ggplot(Cena_sigma,aes(x = Zmiennosc)) +
+  geom_line(aes(y = Cena.opcji.EPut,color = "Europejski Put")) + 
+  geom_line(aes(y = Cena.opcji.ECall,color = "Europejski Call")) +
+  geom_line(aes(y = Cena.opcji.APut,color = "Amerykański Put")) + 
+  geom_line(aes(y = Cena.opcji.ACall,color = "Amerykański Call"))+
+    scale_colour_manual("", 
+                      breaks = c("Europejski Put", 
+                                 "Europejski Call", 
+                                 "Amerykański Put",
+                                 "Amerykański Call"),
+                      values = c("blue", "yellow", "darkgreen","red")) +
+    labs(x=expression(Sigma), y="Cena opcji", title="W zależności od zmienności") +
+  theme(plot.title = element_text(hjust = 0.5)) + theme_minimal(base_size=10)
+```
+
+Ceny opcji call i put rośną liniowo ze względu na zwiękające się ryzyko takich inwestycji. Zmienność zwiększa różnice w cenie aktywa bazowego w kolejnych etapach symulacji. Oznacza to bardziej skrajne ceny aktywa bazowego a w konsekwencji wyższe wartości payoffu. Ponieważ skrajnie gorsze ceny i tak są sprowadzane do zera przez funkcję payoffu. Wyższe ryzyko nie oznacza wyższych strat a jedynie wyższe zyski. Cena opcji europejskiej call jest wyższa od ceny opcji put, gdyż z parytetu otrzymujemy: $$C_E=P_E+S_0-K \cdot e^{-rT}$$ Dla naszych warunków zadania różnica ta wynosi: $S_0 - K \cdot e^{-rT} = 3.88$, jako iż cena amerykańskiej i europejskiej opcji call są sobie równe to rożnica między ceną amerykańskiego call i europejskiego puta jest identyczna.     
+Z wykresu widać też, że ceny ustabilizują się w okolicy wartości początkowej aktywa, ponieważ nie byłoby sensu kupować opcji na zakup aktywa w przyszłości po wyższej cenie niż dostępna na rynku obecnie
+
+
+
+
+```{r 13, echo=FALSE,warning=FALSE}
+r <- seq(0,1,0.001)
+
+Cena_r <- data.frame("Stopa wolna od ryzyka" = r,
+                             "Cena opcji EPut" = 
+                               sapply(r,function(x) Cena(
+                                            Position = 'Put',
+                                            Type = 'Europejska',
+                                            dt = 1/12,
+                                            t = 2,
+                                            s = 0.3,
+                                            s0 = 50,
+                                            k = 48,
+                                            r = x)),
+                                "Cena opcji ECall" =
+                                sapply(r,function(x) Cena(
+                                            Position = 'Call',
+                                            Type = 'Europejska',
+                                            dt = 1/12,
+                                            t = 2,
+                                            s = 0.3,
+                                            s0 = 50,
+                                            k = 48,
+                                            r = x)),
+                                "Cena opcji APut" =
+                                sapply(r,function(x) Cena(
+                                            Position = 'Put',
+                                            Type = 'Amerykanska',
+                                            dt = 1/12,
+                                            t = 2,
+                                            s = 0.3,
+                                            s0 = 50,
+                                            k = 48,
+                                            r = x)),
+                                "Cena opcji ACall" =
+                                sapply(r,function(x) Cena(
+                                            Position = 'Call',
+                                            Type = 'Amerykanska',
+                                            dt = 1/12,
+                                            t = 2,
+                                            s = 0.3,
+                                            s0 = 50,
+                                            k = 48,
+                                            r = x)))
+
+ggplot(Cena_r,aes(x = Stopa.wolna.od.ryzyka)) +
+  geom_line(aes(y = Cena.opcji.EPut,color = "Europejski Put")) + 
+  geom_line(aes(y = Cena.opcji.ECall,color = "Europejski Call")) +
+  geom_line(aes(y = Cena.opcji.APut,color = "Amerykański Put")) + 
+  geom_line(aes(y = Cena.opcji.ACall,color = "Amerykański Call"))+
+    scale_colour_manual("", 
+                      breaks = c("Europejski Put", 
+                                 "Europejski Call", 
+                                 "Amerykański Put",
+                                 "Amerykański Call"),
+                      values = c("blue", "yellow", "darkgreen","red")) +
+    labs(x=expression(r), y="Cena opcji", title="W zależności od stopy wolnej od ryzyka") +
+  theme(plot.title = element_text(hjust = 0.5)) + theme_minimal(base_size=10)
+```
+
+Przy rosnącej stopie wolnej od ryzyka przychody uzyskane w dalekiej przyszłości tracą na znaczeniu (mniejsze kwoty możnaby zainwestować po wysokiej stopie procentowej teraz i uzyskać duże kwoty w przyszłości). Wartość pieniądza w czasie maleje i strike za który kupujemy aktywo jest w dzisiejszej perspektywie mniejszą kwotą. Cena opcji umożliwiającej nam taki zakup musi więc rosnąć w miarę jak zwiększa się stopa procentowa, tak aby odzwierciedlała spadek rzeczywistej wartości ceny w przyszłości. Cena opcji put analogicznie spada, ponieważ sprzedanie aktywa w przyszłości wygeneruje przychód w przyszłości, a jest on mniej warty w miarę jak rośnie stopa wolna od ryzyka patrząc z dzisiejszej perspektywy.
+
+
+```{r 14, echo=FALSE,warning=FALSE}
+dt <- seq(0.005,0.20,0.001)
+
+Cena_dt <- data.frame("deltat" = dt,
+                             "Cena opcji EPut" = 
+                               sapply(dt,function(x) Cena(
+                                            Position = 'Put',
+                                            Type = 'Europejska',
+                                            dt = x,
+                                            t = 2,
+                                            s = 0.3,
+                                            s0 = 50,
+                                            k = 48,
+                                            r = 0.02)),
+                                "Cena opcji ECall" =
+                                sapply(dt,function(x) Cena(
+                                            Position = 'Call',
+                                            Type = 'Europejska',
+                                            dt = x,
+                                            t = 2,
+                                            s = 0.3,
+                                            s0 = 50,
+                                            k = 48,
+                                            r = 0.02)),
+                                "Cena opcji APut" =
+                                sapply(dt,function(x) Cena(
+                                            Position = 'Put',
+                                            Type = 'Amerykanska',
+                                            dt = x,
+                                            t = 2,
+                                            s = 0.3,
+                                            s0 = 50,
+                                            k = 48,
+                                            r = 0.02)),
+                                "Cena opcji ACall" =
+                                sapply(dt,function(x) Cena(
+                                            Position = 'Call',
+                                            Type = 'Amerykanska',
+                                            dt = x,
+                                            t = 2,
+                                            s = 0.3,
+                                            s0 = 50,
+                                            k = 48,
+                                            r = 0.02)))
+
+ggplot(Cena_dt,aes(x = dt)) +
+  geom_line(aes(y = Cena.opcji.EPut,color = "Europejski Put")) + 
+  geom_line(aes(y = Cena.opcji.ECall,color = "Europejski Call")) +
+  geom_line(aes(y = Cena.opcji.APut,color = "Amerykański Put")) + 
+  geom_line(aes(y = Cena.opcji.ACall,color = "Amerykański Call"))+
+    scale_colour_manual("", 
+                      breaks = c("Europejski Put", 
+                                 "Europejski Call", 
+                                 "Amerykański Put",
+                                 "Amerykański Call"),
+                      values = c("blue", "yellow", "darkgreen","red")) +
+    labs(x=expression(Wartość Deltat), y="Cena opcji", title="W zależności od liczby kroków w modelu") +
+  theme(plot.title = element_text(hjust = 0.5)) + theme_minimal(base_size=10)
+```
+
+Na powyższym wykresie widzimy, że zwiększając liczbę kroków w modelu dwumianowym zmniejszają się wachania między wynikami kolejnych wycen. Wskazuje to na zwiększającą się dokładność odzwierciadlania 'rzeczywistych' warunków rynku, gdzie ceny aktyw mogą zmieniać się dużo bardziej dynamicznie. Powyższy wykres dowodzi, że nawet przy tak dużym kroku jak $\frac{1}{12} = 0.08$, czyli stosunkowo małej liczbie etapów symulacji wycena opcji jest bardzo zbliżona do tej przy bardzo małym kroku i dużej ilości etapów. Przy kroku większym niż 0.1 widzimy duże pogorszenie w dokładności wyceny, wyniki znacznie bardziej różnią się od poprzednich. Różnice między kolejnymi wynikami są duże ze względu na to, że dla niektórych wartości dt nie sumują się one do jedynki.
+
+# Skład portfela zabezpieczającego opcje amerykańską i europejską call
+
+Portfel zabezpieczający opcje składa się z pewnej ilości aktywa bazowego oraz gotówki i jest wyliczany tak, aby zabezpieczyć się przed potencjalnie nieskończoną stratą na pozycji short.
+Obligując się do sprzedaży aktywa (short call) jego cena może wzrosnąć dowolnie dużo, a więc kupując je w momencie wykonania opcji strata może być dowolnie duża. Stąd dobrą strategią zabezpieczającą jest zakup aktywa tak aby nie musieć kupować go po dowolnie dużej cenie w przyszłości. Poniższa tabele pokazuje też, że w miarę jak cena aktywa bazowego spada możemy zmniejszać ilość tego aktywa jako, że samo wykonanie opcji staje się coraz bardziej opłacalne. 
+
+```{r 15, echo=FALSE}
+
+Hedging = function(Treecen,position,type, dt, t){
+  L=Wycena(position,type,1/12,2,0.3,50,48,0.02)
+  Tree = matrix(unlist(L[1]), nrow=25)
+  n = t * 1/dt
+  prev = Tree[, n+1] #dzrzewo payoffów danej opcji
+  DeltaTree = matrix(prev, ncol=1) #drzewo delta
+  AlfaTree = matrix(prev, ncol=1)
+  for(i in (n+1):2)
+    {
+    prev = Tree[,i]
+    NewCol = (prev[1:i-1]-prev[2:i])/(Treecen[1:i-1,i]-Treecen[2:i,i])
+    NewCol2 = (-NewCol*(Treecen[2:i,i])+prev[2:i])*exp(0.02*dt)
+    NewCol2 = c(NewCol2, rep(0, n+2 - i))
+    NewCol = c(NewCol, rep(0, n+2 - i))
+    DeltaTree = cbind(NewCol, DeltaTree)
+    AlfaTree = cbind(NewCol2, AlfaTree)
+    }
+  
+  names = 0:n
+  colnames(DeltaTree) = names
+  DeltaTree=DeltaTree[,1:24]
+  colnames(AlfaTree) = names
+  AlfaTree=AlfaTree[,1:24]
+  return(list(DeltaTree,AlfaTree))
+}
+
+
+Tree=MakeTree(1/12,2,0.3,50)
+L=Hedging(Tree,'Call','Europejska',1/12,2)
+
+DeltaTree = round(data.frame(matrix(unlist(L[1]), nrow=25)),2)
+colnames(DeltaTree) = 1:24
+DeltaTree[DeltaTree == 0] = ""
+
+AlfaTree = round(data.frame(matrix(unlist(L[2]), nrow=25)),2)
+colnames(AlfaTree) = 1:24
+AlfaTree[AlfaTree == 0] = ""
+```
+
+\newpage
+
+## Ilość akcji
+
+```{r 16, echo=FALSE}
+kable(
+  DeltaTree[1:11,1:12],
+  align = 'c',
+  caption = "Moment")
+```
+
+
+
+```{r 17, echo=FALSE}
+kable(
+  DeltaTree[1:14,13:24],
+  align = 'c',
+  caption = "Moment")
+```
+
+Na powyższej tabeli widzimy, że w miarę jak spada cena aktywa bazowego, zmniejsza się liczba tych aktyw którą posiadamy w naszym portfelu.
+
+\newpage
+
+## Ilość gotówki
+
+```{r 18, echo=FALSE}
+kable(
+  AlfaTree[1:13,1:12],
+  align = 'c',
+  caption = "Moment")
+```
+
+
+
+```{r 19, echo=FALSE}
+kable(
+  AlfaTree[1:13,13:24],
+  align = 'c',
+  caption = "Moment")
+```
+
+Na powyższych tabelach widzimy ilość gotówki odpowiadającą tego ile aktywa posiadamy i za jaką cenę je kupiliśmy.
+
+\newpage
+
+# Skład portfela zabezpieczającego opcje amerykańską put
+
+
+Zabezpieczanie opcji na pozycji short put odbywa się przez krótką sprzedaż aktywa, tak aby uzyskaną gotówkę zakumulować i wypracować zysk z czasem, a brakujące aktywo (sprzedaliśmy je nie posiadając go) odzyskujemy w momencie wykonania opcji put. Jeśli w tym czasie cena aktywa wzrosła mamy zysk z samego faktu posiadania aktywa wartego więcej niż cena za którą go kupujemy, dlatego wtedy zmniejszamy nasz dług w ilości aktywa, aby zmaksymalizować zysk z wzrostu jego wartości. Kiedy cena aktywa spada będziemy musieli kupić je za strike, a jego wartość jest niska więc sprzedajemy aktywo zanim je posiadamy otrzymując jego równowartość jego ceny zanim ta cena bardziej spadnie.
+
+```{r 21, echo=FALSE}
+Tree=MakeTree(1/12,2,0.3,50)
+L=Hedging(Tree,'Put','Amerykanska',1/12,2)
+
+DeltaTree = round(data.frame(matrix(unlist(L[1]), nrow=25)),2)
+colnames(DeltaTree) = 1:24
+DeltaTree[DeltaTree == 0] = ""
+
+AlfaTree = round(data.frame(matrix(unlist(L[2]), nrow=25)),2)
+colnames(AlfaTree) = 1:24
+AlfaTree[AlfaTree == 0] = ""
+```
+
+## Ilość akcji
+
+```{r 22, echo=FALSE}
+kable(
+  DeltaTree[1:12,1:12],
+  align = 'c',
+  caption = "Moment")
+```
+
+\newpage
+
+```{r 23, echo=FALSE}
+kable(
+  DeltaTree[1:24,13:24],
+  align = 'c',
+  caption = "Moment")
+```
+
+
+## Ilość gotówki
+
+```{r 24, echo=FALSE}
+kable(
+  AlfaTree[1:12,1:12],
+  align = 'c',
+  caption = "Moment")
+```
+
+\newpage
+
+```{r 25, echo=FALSE}
+kable(
+  AlfaTree[1:24,13:24],
+  align = 'c',
+  caption = "Moment")
+```
+
+
+
+# Skład portfela zabezpieczającego opcje europejską put
+
+Na poniższych tabelach widać, że wartość portfela zabezpieczającego jest bardzo podobna do opcji europejskiej. Różnice pojawiają się częściej bliżej węzłów w których wykonalibyśmy opcję natychmiastowo.
+
+
+
+\newpage
+
+```{r 26, echo=FALSE}
+Tree=MakeTree(1/12,2,0.3,50)
+L=Hedging(Tree,'Put','Europejska',1/12,2)
+
+DeltaTree = round(data.frame(matrix(unlist(L[1]), nrow=25)),2)
+colnames(DeltaTree) = 1:24
+DeltaTree[DeltaTree == 0] = ""
+
+AlfaTree = round(data.frame(matrix(unlist(L[2]), nrow=25)),2)
+colnames(AlfaTree) = 1:24
+AlfaTree[AlfaTree == 0] = ""
+```
+
+## Ilość akcji
+
+```{r 27, echo=FALSE}
+kable(
+  DeltaTree[1:12,1:12],
+  align = 'c',
+  caption = "Moment")
+```
+
+
+
+```{r 28, echo=FALSE}
+kable(
+  DeltaTree[1:24,13:24],
+  align = 'c',
+  caption = "Moment")
+```
+
+\newpage
+
+## Ilość gotówki
+
+```{r 29, echo=FALSE}
+kable(
+  AlfaTree[1:12,1:12],
+  align = 'c',
+  caption = "Moment")
+```
+
+
+
+```{r 30, echo=FALSE}
+kable(
+  AlfaTree[1:24,13:24],
+  align = 'c',
+  caption = "Moment")
+```
+
+\newpage
+
+Niektóre puste miejsca w tabelach nie zostały wypisane, tabele kończą się na ostatnich niezerowych wartościach.
+
+Wartości powyższych tabel zostały wyznaczone za pomocą wzorów z wykładu. 
+$$\Delta_x=\frac{V^{\downarrow }_{t+1}-V^{\uparrow }_{t+1}}{S_{t+1}^{\downarrow }-S_{t+1}^{\uparrow }} $$
+gdzie: \newline
+$\Delta_x$ to liczba sztuk posiadanego aktywa w węźle x \newline 
+
+
+$$\alpha_x=e^{-r\Delta t}(V^{\downarrow }_{t+1}-\Delta_x *S_{t+1}^{\downarrow })$$
+gdzie: \newline
+$\alpha_x$ to ilość posiadanej gotówki w węźle x
+
+
+
+# Podsumowanie
+
+## Model
+
+Używany przez nas model dwumianowy wyceny opcji jest bardzo wrażliwy na parametry które mu dostarczymy. Część z nich jest jednak osadzona w rzeczywistości i możemy wprowadzić je korzystając z prawdziwych danych.   
+Strike, cena aktywa w chwili zero, maksymalny okres wykonania opcji. Te parametry można wyciągnąć z opisu kupowanej opcji. Stopę procentową wolną od ryzyka można ustalić na poziomie oferowanym przez obligacje skarbowe.   
+Pozostaje jednak kwestia zmienności która wpływa co prawda na wycenę opcji ale nie na stosunek tych wycen między rodzajami. Oznacza to, że dla innej zmienności, potencjalnie bardziej zbliżonej prawdziwym warunkom rynkowym otrzymamy inne ceny, ale wciąż opcje call będą droższe od put, a amerykański put odrobinę droższy od europejskiego.
+Taki model pozwala nam więc z dość dużą dokładnością wycenić opcje i porównać ich specyfikę.
+
+## Analiza opcji call
+
+Wyceny opcji amerykańskich call i europejskich call są zawsze równe, co dowiedliśmy zarówno teoretycznie jak i pokazaliśmy empirycznie. Żaden parametr nie ma wpływu na tę zależność, jedynie wprowadzenie aktywa wypłacającego dywidendy mogłoby zmienić te wyceny. Obie opcje należy więc traktować jako tożsame jeśli aktywo nie wypłaca dywidend.   
+Cena opcji call rośnie wraz ze wzrostem stopy wolnej od ryzyka, wartość pieniądza w czasie maleje i strike za który kupujemy aktywo jest w dzisiejszej perspektrywie mniejszą kwotą. Wartość aktywa jest niewrażliwa na stopy procentowe, więc uzyskujemy to samo za stosunkowo mniej, stąd większa cena samej opcji.   
+Przy dużej wartości początkowej aktywa bazowego mamy zysk już w trakcie zakupu opcji, stąd wyższa cena.   
+Przy większej zapadalności mamy więcej szans na uzyskanie przychodu, negatywne scenariusze i tak są sprowadzane do zera przez funckję payoffu, a mamy coraz więcej pozytywnych. Opcja call ze względu na nieograniczony zysk będzie rosła do zdyskontowanej ceny początkowej aktywa bazowego i tam się zatrzyma ze względu na nieopłacalność kupowania opcji po wyższej cenie niż ta za którą możemy je kupić od razu.
+Cena spada wraz z wzrostem strike, zgodnie z funkcją payoffu $max(S_T-K;0)$. 
+
+\newpage
+
+## Analiza opcji put
+
+Opcje amerykańskie put są zawsze droższe niż ich europejskie odpowiedniki, żadne parametry nie psują tej zależności.   
+Zwiększenie zapadalności daje nam coraz więcej węzłów w symulacji, czyli potencjalnie coraz więcej miejsc w których opcja amerykańska wykona się natychmiastowo, zwiększając swoją wartość. Zysk z opcji put jest jednak ograniczony i dlatego wycena tych opcji nie rośnie w nieskończoność, a raczej ustabilizuje się w pewnym miejscu.    
+Zwiększenie strike zwiększa ilość węzłów w których natychmiastowe wykonanie (payoff w tym momencie) jest bardziej opłacalne, bo wzór payoffu w Put to $max(K-S_T;0)$ stąd amerykański put odbiega od europejskiego. Jest to też jedyny przypadek w którym cena opcji put rozbiega do nieskończoności.      
+Analogicznie zmniejszenie ceny początkowej aktywa bazowego zmniejsza też przyszłe jego wartości, zmniejszając payoff przy natychmiastowym wykonaniu. W konsekwencji zmniejsza się ilość węzłów w których opłaca się wykonać opcję, a więc jej cena zbiega do ceny opcji europejskiej.    
+Zwiększająca się stopa procentowa minimalizuje wartość przychodów uzyskanych w przyszłości, oznacza to, że czym jest większa tym mniejsze znaczenie mają momenty w których moglibyśmy wykonać opcję natychmiastowo.
+
+## Zmienność
+
+Zmienność reprezentuje jak bardzo zwiększa się i zmniejsza wartość aktywa bazowego, ma więc reprezentować jak dynamiczne jest dane aktywo i z jak dużym ryzykiem się wiąże. Czym większa zmienność tym większe ryzyko inwestycji, zgodnie z oczekiwaniami cena opcji też jest coraz większa.   
+
+## Ograniczenia modelu
+
+W tym momencie należy zauważyć główne ograniczenie modelu dwumianowego, przy ustalonej zmienności nie ma mowy o rzeczywiście nieeograniczonym zysku z opcji call albo nieograniczonej stracie strony short. Ten fakt determinuje wygląd wielu wykresów i przede wszystkim to, dlaczego nie opłaca się wykonywać opcji call w trakcie jej trwania (zawsze mamy perspektywę na większe zyski), a dlaczego opłaca się wykonywać w trakcie opcje put (nasz zysk nie może być większy niż strike). Mimo tego ograniczenia model dwumianowy wykazuje te właściwości poprawnie więc w dobrym stopniu przybliża własności opcji. Należy też zauważyć, że mimo potencjalnie nieskończonych zysków sama cena opcji call nigdy nie przekroczy wartości aktywa bazowego w chwili zero. 
+
+## Liczba kroków w modelu
+
+Duża liczba kroków w modelu pozwala zbliżyć go do dynamicznej natury cen rynkowych i umożliwia osiągnięcie bardziej skrajnych cen aktywom bazowym. Można z całą pewnością stwierdzić, że większa ilość kroków w modelu zwiększa jego dokładność i lepiej odzwierciedla rzeczywistość.
+
+## Zabezpieczanie
+
+Opcje można zabezpieczyć, aby zminimalizować ryzyko (dowolnie) dużych strat, takie zabezpieczenie wydaję się wręcz konieczne w przypadku stron niedecyzyjnych (short) a zupełnie niepotrzebne z punktu widzenia strony long. Zabezpieczanie pozycji long w zasadzie sprowadza nasz zysk z inwestycji do zera, dla short zapobiega dużym stratom.    
+Należy zauważyć, że portfel zabezpieczający jest bardzo zmienny i w zależności od sytuacji rynkowej należy go dostosowywać. Dzięki takim strategiom możemy zmniejszyć ryzyko inwestycji za cenę zmniejszenia potencjalnego zysku.
+
+## Konkluzja
+
+Model dwumianowy dobrze ukazuje własności opcji mimo dużych uproszczeń. Nie odzwierciedla dobrze zmian wartości aktywa bazowego ale zachowuje wszystko co ważne dla różnic między opcjami.
+
+
+
